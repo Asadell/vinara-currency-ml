@@ -1,0 +1,17 @@
+# Rupiah Vision - Training Pipeline (revisi)
+#
+# Catatan versi:
+#   - TensorFlow 2.16+ pakai Keras 3. Kode ini ditulis untuk Keras 3
+#     (pakai model.export() untuk SavedModel, bukan model.save(folder)).
+#   - albumentations 1.4.15+ dibutuhkan karena API transform berubah
+#     (num_holes_range, std_range, quality_range, fill, dsb).
+
+tensorflow>=2.16.0,<2.20.0
+numpy>=1.24.0,<2.1.0
+opencv-python-headless>=4.8.0
+albumentations>=1.4.15
+matplotlib>=3.7.0
+Pillow>=10.0.0
+
+# Opsional: cuma dipakai kalau kamu mau menarik dataset dari Roboflow
+roboflow>=1.1.0

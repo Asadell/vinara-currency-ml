@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.tflite
+*.keras
+*.h5
+runs/
+data/
+datasets/
+.DS_Store
