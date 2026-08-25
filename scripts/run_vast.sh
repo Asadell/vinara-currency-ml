@@ -71,10 +71,10 @@ A.Compose([
 print("  API albumentations cocok")
 PY
 
-# ── Step 1: dataset ───────────────────────────────────────────────────────────
+# ── Step 1: download dataset ──────────────────────────────────────────────────
 if [ ! -d "$DATASET_DIR/rf-rupiah-detector" ]; then
     echo -e "\n[1/5] Download dataset ke $DATASET_DIR ..."
-    "$PYTHON_BIN" ../datasets/download_rupiah.py
+    "$PYTHON_BIN" scripts/download_rupiah.py
 else
     echo -e "\n[1/5] Dataset sudah ada di $DATASET_DIR"
 fi
@@ -82,15 +82,11 @@ fi
 # ── Step 2: merge, crop, dedup, group-aware split ─────────────────────────────
 echo -e "\n[2/5] Merge & crop -> $DATA_DIR ..."
 MERGE_ARGS=(
-    --datasets "$DATASET_DIR/rf-rupiah-detector"
-               "$DATASET_DIR/rf-money-detection-valid"
-               "$DATASET_DIR/rf-rupiah-skripsi"
     --output "$DATA_DIR"
     --val-split 0.15
     --test-split 0.10
     --dedup-threshold 4
     --min-blur 25
-    --min-blur-extra 3
     --verify-leakage
     --clean
 )
