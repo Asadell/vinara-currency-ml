@@ -53,10 +53,8 @@ echo "  Latar    : ${BG_DIR:-(prosedural)}"
 echo "======================================================================"
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
-echo -e "\n[PRE-FLIGHT] Cek dependencies..."
-"$PYTHON_BIN" - <<'PY' || "$PYTHON_BIN" -m pip install -r requirements.txt -q
-import albumentations, cv2, tensorflow  # noqa: F401
-PY
+echo -e "\n[PRE-FLIGHT] Cek & install dependencies..."
+"$PYTHON_BIN" -m pip install -r requirements.txt -q
 "$PYTHON_BIN" - <<'PY'
 import albumentations as A, tensorflow as tf
 print(f"  albumentations {A.__version__} | tensorflow {tf.__version__}")
