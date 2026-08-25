@@ -222,19 +222,19 @@ def normalize_class_name(raw_label: str) -> str | None:
         if not any(x in s for x in ['1000', '2000', '5000', '10000', '20000', '50000', '100000', '1k', '2k', '5k', '10k', '20k', '50k', '100k']):
             return None
         
-    if any(x in s for x in ['seratus', '100k', '100ribu', '100.000', '100000']):
+    if any(x in s for x in ['seratus', '100k', '100ribu', '100rb', '100.000', '100000']):
         return '100000'
-    if any(x in s for x in ['lima puluh', '50k', '50ribu', '50.000', '50000']):
+    if any(x in s for x in ['lima puluh', '50k', '50ribu', '50rb', '50.000', '50000']):
         return '50000'
-    if any(x in s for x in ['dua puluh', '20k', '20ribu', '20.000', '20000']):
+    if any(x in s for x in ['dua puluh', '20k', '20ribu', '20rb', '20.000', '20000']):
         return '20000'
-    if any(x in s for x in ['sepuluh', '10k', '10ribu', '10.000', '10000']):
+    if any(x in s for x in ['sepuluh', '10k', '10ribu', '10rb', '10.000', '10000']):
         return '10000'
-    if any(x in s for x in ['lima', '5k', '5ribu', '5.000', '5000']):
+    if any(x in s for x in ['lima', '5k', '5ribu', '5rb', '5.000', '5000']):
         return '5000'
-    if any(x in s for x in ['dua', '2k', '2ribu', '2.000', '2000']):
+    if any(x in s for x in ['dua', '2k', '2ribu', '2rb', '2.000', '2000']):
         return '2000'
-    if any(x in s for x in ['seribu', '1k', '1ribu', '1.000', '1000']):
+    if any(x in s for x in ['seribu', '1k', '1ribu', '1rb', '1.000', '1000']):
         return '1000'
         
     digits = re.sub(r'[^\d]', '', s)
