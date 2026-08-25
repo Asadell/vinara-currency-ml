@@ -116,10 +116,9 @@ def load_any_model(path: str) -> tf.keras.Model:
     p = Path(path)
     if p.suffix == ".keras" or p.suffix == ".h5":
         model = tf.keras.models.load_model(str(p), compile=False)
-        inp = tf.keras.Input(shape=(224, 224, 3), dtype=tf.float32, name="image")
+        inp = tf.keras.Input(shape=(224, 224, 3), dtype="float32", name="image")
         out = model(inp)
-        if hasattr(out, "dtype") and out.dtype != tf.float32:
-            out = tf.cast(out, tf.float32)
+        out = tf.keras.layers.Activation("linear", dtype="float32", name="float32_out")(out)
         return tf.keras.Model(inputs=inp, outputs=out, name="rupiah_infer_float32")
     return tf.keras.layers.TFSMLayer(str(p), call_endpoint="serve")
 
