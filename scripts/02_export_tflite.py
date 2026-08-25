@@ -60,6 +60,7 @@ import numpy as np
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 import tensorflow as tf  # noqa: E402
+tf.keras.mixed_precision.set_global_policy("float32")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.common import CLASS_ORDER, NUM_CLASSES  # noqa: E402
@@ -111,21 +112,28 @@ def make_representative_dataset(data_dir: Path, img_size: int,
 
 def load_any_model(path: str) -> tf.keras.Model:
     """Muat .keras, SavedModel, atau folder export."""
+    tf.keras.mixed_precision.set_global_policy("float32")
     p = Path(path)
     if p.suffix == ".keras" or p.suffix == ".h5":
-        return tf.keras.models.load_model(str(p), compile=False)
+        model = tf.keras.models.load_model(str(p), compile=False)
+        inp = tf.keras.Input(shape=(224, 224, 3), dtype=tf.float32, name="image")
+        out = model(inp)
+        if hasattr(out, "dtype") and out.dtype != tf.float32:
+            out = tf.cast(out, tf.float32)
+        return tf.keras.Model(inputs=inp, outputs=out, name="rupiah_infer_float32")
     return tf.keras.layers.TFSMLayer(str(p), call_endpoint="serve")
 
 
 def build_converter(model, tmp_dir: str):
-    """Bikin converter dari SavedModel (lebih stabil daripada from_keras_model)."""
+    """Bikin converter dari model Keras."""
+    tf.keras.mixed_precision.set_global_policy("float32")
     shutil.rmtree(tmp_dir, ignore_errors=True)
     try:
+        return tf.lite.TFLiteConverter.from_keras_model(model)
+    except Exception as e:
+        print(f"   (from_keras_model gagal: {e}; pakai SavedModel)")
         model.export(tmp_dir)
         return tf.lite.TFLiteConverter.from_saved_model(tmp_dir)
-    except Exception as e:
-        print(f"   (export SavedModel gagal: {e}; pakai from_keras_model)")
-        return tf.lite.TFLiteConverter.from_keras_model(model)
 
 
 def write_model(tflite_bytes: bytes, path: Path) -> float:
