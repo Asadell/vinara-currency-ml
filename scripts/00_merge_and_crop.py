@@ -448,7 +448,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Merge dataset deteksi -> dataset klasifikasi (group-aware, dedup)"
     )
-    ap.add_argument("--datasets", nargs="*", default=[],
+    ap.add_argument("--datasets", nargs="*", default=None,
                     help="Folder dataset Roboflow YOLO (punya train/valid/test)")
     ap.add_argument("--extra-dirs", nargs="*", default=[],
                     help="Folder foto manual berformat <dir>/<nominal>/*.jpg")
@@ -481,6 +481,12 @@ def main():
     ap.add_argument("--clean", action="store_true",
                     help="Hapus folder output kalau sudah ada")
     args = ap.parse_args()
+
+    if args.datasets is None or len(args.datasets) == 0:
+        import glob
+        default_pattern = os.path.expanduser("~/datasets/rupiah-detection/rf-*")
+        args.datasets = sorted(glob.glob(default_pattern))
+        print(f"[INFO] Auto-discovered {len(args.datasets)} datasets in ~/datasets/rupiah-detection/rf-*")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
