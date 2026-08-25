@@ -78,42 +78,70 @@ jauh lebih lemah (tanpa elastic, perspective, simulasi lipatan, simulasi kusut).
 
 ---
 
-## Dataset Sumber (16 Dataset Roboflow Combined Mega-Dataset)
+## Dataset Sumber (16 Dataset Roboflow Megamix — Total 1.09 GB)
 
-Pipeline ini secara otomatis mengunduh, menggabungkan, memotong bounding box (crop), dan menstandardisasi **16 dataset Roboflow** (3 dataset awal + 13 dataset tambahan) untuk mencakup variasi emisi baru (2022), emisi lama (2016), kondisi lecek, pencahayaan minim, serta sudut pengambilan gambar yang beragam:
+Pipeline ini secara otomatis mengunduh, menggabungkan, memotong bounding box (crop), dan menstandardisasi **16 dataset Roboflow** langsung di VPS GPU untuk mencakup variasi emisi baru (2022), emisi lama (2016), kondisi lecek, pencahayaan minim, serta sudut pengambilan gambar yang beragam:
 
-### 3 Dataset Baseline Awal
-1. `skripsi-3kth2/deteksi-mata-uang-rupiah-nerog (v2)`
-2. `rupiah-detector/rupiah-detector-qzmb7 (v2)`
-3. `workspace1-u35mt/money-detection-valid (v4)`
+### Tabel Rincian Dataset Sumber di VPS GPU
 
-### 13 Dataset Tambahan Baru
-4. `moneysaver-yolo/deteksi-uang-s0pfe` - Deteksi uang Rupiah
-5. `skripsi-swuyl/detetksi-keaslian-uang` - Deteksi fisik & nominal Rupiah
-6. `yoloai-3iuvz/uang_deteksi` - Deteksi multi-nominal Rupiah
-7. `amndan/uangbaru2022` - Khusus emisi baru Rupiah 2022
-8. `jemy07s-workspace/tubes-psi-ydfzm` - Dataset Rupiah beragam kondisi
-9. `adelias-workspace/modeluangv2-t1lk9` - Dataset model Rupiah v2
-10. `zannho/rupiah-detection-o3agm` - Deteksi Rupiah multi-variasi
-11. `muhammad-aidil-wlsfe/cnnyolo-hhphe` - Dataset CNN/YOLO Rupiah
-12. `cahyadin/money_detection-pnnd7` - Deteksi uang Rupiah
-13. `4ia17ottos-workspace/moneydetection-uetq8` - Deteksi Rupiah variasi sudut
-14. `tes-nms6d/uang-kertas-2022-dan-logam-2016` - Uang kertas 2022 & logam 2016
-15. `4ia17ottos-workspace/uang_baru` - Uang kertas emisi 2022
-16. `project-binus/rupiah-detection-d1vbz` - Dataset Rupiah project Binus
+| No | Dataset Roboflow | Folder (`~/datasets/rupiah-detection/`) | Ukuran File | Jumlah Gambar Sumber |
+|:---:|---|---|:---:|:---:|
+| 1 | `skripsi-3kth2/deteksi-mata-uang-rupiah-nerog (v2)` | `rf-rupiah-skripsi` | **30.65 MB** | 608 |
+| 2 | `rupiah-detector/rupiah-detector-qzmb7 (v2)` | `rf-rupiah-detector` | **96.90 MB** | 1,941 |
+| 3 | `workspace1-u35mt/money-detection-valid (v4)` | `rf-money-detection-valid` | **236.83 MB** | 9,101 |
+| 4 | `moneysaver-yolo/deteksi-uang-s0pfe` | `rf-moneysaver-yolo` | **40.66 MB** | 914 |
+| 5 | `skripsi-swuyl/detetksi-keaslian-uang` | `rf-skripsi-swuyl` | *(Auto-fallback v1)* | *(merged)* |
+| 6 | `yoloai-3iuvz/uang_deteksi` | `rf-yoloai-3iuvz` | **44.56 MB** | 3,360 |
+| 7 | `amndan/uangbaru2022` | `rf-amndan` | **4.33 MB** | 247 |
+| 8 | `jemy07s-workspace/tubes-psi-ydfzm` | `rf-jemy07s` | **86.13 MB** | 2,570 |
+| 9 | `adelias-workspace/modeluangv2-t1lk9` | `rf-adelias` | **223.81 MB** | 4,954 |
+| 10 | `zannho/rupiah-detection-o3agm` | `rf-zannho` | **36.12 MB** | 1,076 |
+| 11 | `muhammad-aidil-wlsfe/cnnyolo-hhphe` | `rf-muhammad-aidil` | **83.25 MB** | 2,740 |
+| 12 | `cahyadin/money_detection-pnnd7` | `rf-cahyadin` | **34.52 MB** | *(empty)* |
+| 13 | `4ia17ottos-workspace/moneydetection-uetq8` | `rf-4ia17ottos-uetq8` | **197.86 MB** | 3,426 |
+| 14 | `tes-nms6d/uang-kertas-2022-dan-logam-2016` | `rf-tes-nms6d` | *(Auto-fallback v1)* | *(merged)* |
+| 15 | `4ia17ottos-workspace/uang_baru` | `rf-4ia17ottos-uang-baru` | *(Auto-fallback v1)* | *(merged)* |
+| 16 | `project-binus/rupiah-detection-d1vbz` | `rf-project-binus` | *(Auto-fallback v1)* | *(merged)* |
+| **TOTAL** | **16 Dataset Combined Megamix** | `~/datasets/rupiah-detection/` | **1.09 GB** *(1,115.61 MB)* | **30,937 Gambar Sumber** |
+
+---
+
+### Hasil Akhir Ekstraksi & Split Classification Dataset (`data/classification`)
+
+Setiap bounding box dipotong (crop) dengan padding adaptif, dideplikasi menggunakan pHash 64-bit anti-leakage, dan dibagikan secara group-stratified:
+
+- **Total Gambar Sumber**: 30,937 foto
+- **Total Grup Foto Unik**: 18,796 foto (mencegah kebocoran video frame / burst photo)
+- **Crop BBox Kualitas Tinggi Dipertahankan**: **22,147 crop**
+- **Duplikat Dibuang (pHash)**: 17,831 crop
+- **Dibuang (Blur / Kekecilan / Koin)**: 3,331 crop
+- **Imbalance Ratio**: **1.34x** (Sangat Seimbang!)
+
+| Nominal | Train (75%) | Val (15%) | Test (10%) | Total Crop |
+|:---:|:---:|:---:|:---:|:---:|
+| **Rp 1,000** | 2,448 | 486 | 327 | **3,261** |
+| **Rp 2,000** | 2,072 | 421 | 266 | **2,759** |
+| **Rp 5,000** | 2,769 | 552 | 368 | **3,689** |
+| **Rp 10,000** | 2,459 | 493 | 343 | **3,295** |
+| **Rp 20,000** | 2,248 | 446 | 298 | **2,992** |
+| **Rp 50,000** | 2,380 | 459 | 318 | **3,157** |
+| **Rp 100,000** | 2,265 | 437 | 292 | **2,994** |
+| **TOTAL** | **16,641** | **3,294** | **2,212** | **22,147 Crop** |
+
+---
 
 ### Normalisasi Label Otomatis (`normalize_class_name`)
-Karena setiap dataset menggunakan alias label yang berbeda-beda (`5k`, `5ribu`, `Rp 5.000`, `5000 rupiah`, `lima ribu`, `100k`, `seratus ribu`, dll.), script `00_merge_and_crop.py` sekarang **secara otomatis membaca `data.yaml`** tiap dataset dan memetakan semua sinonim label ke **7 nominal standar**:
+Script `00_merge_and_crop.py` secara otomatis membaca `data.yaml` tiap dataset dan memetakan semua alias/sinonim label ke **7 nominal standar**:
 
 | Target Standar | Sinonim / Alias yang Dinormalisasi |
 |---|---|
-| `1000` | `1k`, `1ribu`, `1.000`, `seribu`, `1000`, `Rp 1.000` |
-| `2000` | `2k`, `2ribu`, `2.000`, `dua ribu`, `2000`, `Rp 2.000` |
-| `5000` | `5k`, `5ribu`, `5.000`, `lima ribu`, `5000`, `Rp 5.000` |
-| `10000` | `10k`, `10ribu`, `10.000`, `sepuluh ribu`, `10000`, `Rp 10.000` |
-| `20000` | `20k`, `20ribu`, `20.000`, `dua puluh ribu`, `20000`, `Rp 20.000` |
-| `50000` | `50k`, `50ribu`, `50.000`, `lima puluh ribu`, `50000`, `Rp 50.000` |
-| `100000` | `100k`, `100ribu`, `100.000`, `seratus ribu`, `100000`, `Rp 100.000` |
+| `1000` | `1k`, `1ribu`, `1rb`, `1.000`, `seribu`, `1000`, `Rp 1.000` |
+| `2000` | `2k`, `2ribu`, `2rb`, `2.000`, `dua ribu`, `2000`, `Rp 2.000` |
+| `5000` | `5k`, `5ribu`, `5rb`, `5.000`, `lima ribu`, `5000`, `Rp 5.000` |
+| `10000` | `10k`, `10ribu`, `10rb`, `10.000`, `sepuluh ribu`, `10000`, `Rp 10.000` |
+| `20000` | `20k`, `20ribu`, `20rb`, `20.000`, `dua puluh ribu`, `20000`, `Rp 20.000` |
+| `50000` | `50k`, `50ribu`, `50rb`, `50.000`, `lima puluh ribu`, `50000`, `Rp 50.000` |
+| `100000` | `100k`, `100ribu`, `100rb`, `100.000`, `seratus ribu`, `100000`, `Rp 100.000` |
 
 *Catatan: Label koin/logam (`500 koin`, `1000_koin`), mata uang asing, atau objek luar secara otomatis dikesampingkan agar fokus pada 7 nominal uang kertas Rupiah.*
 
@@ -124,7 +152,7 @@ Karena setiap dataset menggunakan alias label yang berbeda-beda (`5k`, `5ribu`, 
 > [!IMPORTANT]
 > **Selalu jalankan download dan training di Remote GPU (Vast.ai), BUKAN di laptop lokal.** Laptop lokal hanya untuk mengedit code dan dokumentasi.
 
-### Cara Download & Crop Dataset di VPS GPU:
+### Cara Download, Crop, & Train di VPS GPU:
 
 ```bash
 # 1. SSH ke GPU
@@ -134,12 +162,18 @@ ssh -i ~/.ssh/id_vastai -p 37281 root@1.193.137.175
 cd /root/vinara-currency-ml
 git pull origin develop
 
-# 3. Jalankan script download (pastikan ROBOFLOW_API_KEY sudah diset)
-export ROBOFLOW_API_KEY="YOUR_ROBOFLOW_API_KEY"
+# 3. Jalankan script download (dengan ROBOFLOW_API_KEY)
+export ROBOFLOW_API_KEY="FOdZd5fsYRPdf0n5SEEX"
 python3 scripts/download_rupiah.py
 
-# 4. Merge, crop, dedup, dan split 16 dataset
-python3 scripts/00_merge_and_crop.py
+# 4. Merge, crop, dedup, dan split dataset
+python3 scripts/00_merge_and_crop.py --clean
+
+# 5. Preflight check
+python3 scripts/00b_preflight_check.py --data data/classification --deep
+
+# 6. Training Model Rupiah High-Speed GPU
+bash scripts/run_vast.sh
 ```
 
 ---
