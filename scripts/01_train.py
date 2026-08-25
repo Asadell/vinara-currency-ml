@@ -386,7 +386,7 @@ def main():
     ap.add_argument("--data", default="data/classification")
     ap.add_argument("--output", default="models")
     ap.add_argument("--img-size", type=int, default=224)
-    ap.add_argument("--batch-size", type=int, default=32)
+    ap.add_argument("--batch-size", type=int, default=64)
 
     ap.add_argument("--head-epochs", type=int, default=12,
                     help="Epoch tahap 1 (backbone beku)")
@@ -456,12 +456,23 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     gpus = tf.config.list_physical_devices("GPU")
-    print(f"TensorFlow {tf.__version__} | GPU: {len(gpus)}")
+    print(f"\n==============================================================")
+    print(f"  TENSORFLOW VERSION: {tf.__version__}")
+    print(f"  GPU ACCELERATION   : {'✅ TERDETEKSI (' + str(len(gpus)) + ' GPU)' if gpus else '❌ GPU TIDAK TERDETEKSI (Menggunakan CPU)'}")
     for gpu in gpus:
+        print(f"  🚀 GPU DEVICE      : {gpu.name}")
+    print(f"==============================================================\n")
+    if gpus:
         try:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        except RuntimeError:
-            pass
+            tf.keras.mixed_precision.set_global_policy("mixed_float16")
+            print("  ⚡ Mixed Precision FP16 DIAKTIFKAN untuk GPU Acceleration maksimal!")
+        except Exception as e:
+            print(f"  ⚠️ Mixed precision warning: {e}")
+        for gpu in gpus:
+            try:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            except RuntimeError:
+                pass
 
     if not HAS_ALBU:
         print("\nPERINGATAN: albumentations tidak terinstall. "
