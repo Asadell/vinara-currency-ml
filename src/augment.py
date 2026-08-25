@@ -35,12 +35,23 @@ Kelompok augmentasi (tiap kelompok punya alasan fisik):
      - ImageCompression      -> artefak JPEG dari kamera murah
      - Downscale             -> sensor resolusi rendah
 
-Penting soal HUE: kode lama sengaja TIDAK pakai hue shift karena "warna itu
-fitur uang". Itu keliru arah. Justru karena model kelewat bergantung warna,
-dia bingung waktu lampu kuning warung menggeser semua warna. Yang benar:
-hue shift TERBATAS (+/- 8 derajat) supaya model belajar angka & pola juga,
-bukan cuma histogram warna. Jangan digeser ekstrem (+/- 50) karena itu
-memang bisa bikin 2rb abu ketuker 20rb hijau.
+  E. ANTI JALAN-PINTAS WARNA (build_decolor_group)
+     - ToGray, desaturasi kuat, hue lebar
+
+REVISI SOAL HUE (penting, ini mengoreksi versi sebelumnya):
+
+Versi sebelumnya membatasi hue di +/-8 derajat dengan alasan "jangan sampai
+2rb abu ketuker 20rb hijau". Setelah diukur, batasan itu ternyata JUSTRU
+mempertahankan masalahnya. Model hasil pipeline lama mendapat 80.5% pada
+gambar normal tapi cuma 15.2% saat warnanya dibuang, padahal tebak acak
+untuk 7 kelas adalah 14.3%. Dengan kata lain model itu 100% classifier
+warna dan tidak pernah membaca angka nominal sama sekali.
+
+Selama warna selalu cukup untuk menjawab, model tidak punya alasan belajar
+yang lain. Maka sekarang sebagian sampel sengaja dibuat MUSTAHIL dijawab
+pakai warna (lihat build_decolor_group). Hue +/-8 tetap dipakai di jalur
+pencahayaan biasa; pergeseran yang lebih ekstrem hanya muncul di kelompok
+decolor dengan probabilitas terbatas.
 """
 
 from __future__ import annotations
@@ -247,10 +258,19 @@ class CurrencyWear(A.ImageOnlyTransform if _HAS_ALBUMENTATIONS else object):
 #  Pipeline utama
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Catatan kalibrasi frekuensi (diukur, bukan ditebak):
+#   crop uang dari HP kelas bawah  -> variance of Laplacian ~19
+#   crop dataset asli              -> ~813
+#   dataset + GaussianBlur k7 + Downscale 0.35 + JPEG q30 -> ~15
+# Jadi RENTANG augmentasi sudah menjangkau HP burem, yang kurang FREKUENSInya:
+# di preset lama peluang ketiganya menyala bersamaan cuma
+# 0.55 x 0.28 x 0.45 = 6.9% sampel. `optic` dan `Downscale` dinaikkan.
+#
+# `decolor` adalah kelompok BARU, lihat build_decolor_group().
 _PRESETS = {
-    "light":  dict(geo=0.35, wear=0.35, light=0.45, optic=0.30),
-    "medium": dict(geo=0.60, wear=0.65, light=0.75, optic=0.55),
-    "heavy":  dict(geo=0.80, wear=0.85, light=0.90, optic=0.75),
+    "light":  dict(geo=0.35, wear=0.35, light=0.45, optic=0.45, decolor=0.15),
+    "medium": dict(geo=0.60, wear=0.65, light=0.75, optic=0.75, decolor=0.28),
+    "heavy":  dict(geo=0.80, wear=0.85, light=0.90, optic=0.85, decolor=0.38),
 }
 
 
@@ -262,6 +282,60 @@ def _preset(strength: str) -> dict:
     if strength not in _PRESETS:
         raise ValueError(f"strength harus salah satu dari {list(_PRESETS)}")
     return _PRESETS[strength]
+
+
+def build_decolor_group(strength: str = "medium"):
+    """
+    KELOMPOK BARU: paksa model berhenti mengandalkan warna.
+
+    KENAPA INI ADA
+    --------------
+    Model lama diukur begini pada 210 gambar test bersih:
+
+        gambar apa adanya           -> akurasi 80.5%
+        warna dibuang (grayscale)   -> akurasi 15.2%   (tebak acak 7 kelas = 14.3%)
+        warna utuh, detail 12 px    -> akurasi 56.7%
+
+    Artinya model TIDAK PERNAH membaca angka nominalnya. Dia cuma mencocokkan
+    histogram warna. Itu bekerja 80% di dataset karena tiap nominal punya warna
+    dominan yang berbeda, tapi runtuh persis di 20rb (hijau) vs 50rb (biru)
+    saat cahaya redup membuat dua warna itu berdekatan.
+
+    Bukti tambahan: akurasi nyaris tidak berubah dari 224 px (80.5%) ke 63 px
+    (78.6%). Kalau model benar-benar membaca teks "20000", turun ke 63 px pasti
+    menghancurkannya. Datar = dia memang tidak melihat teks.
+
+    Penyebabnya ada di kode lama, tertulis eksplisit di docstring modul ini:
+    hue sengaja dibatasi +/-8 supaya "2rb abu tidak ketuker 20rb hijau". Niatnya
+    benar, tapi efeknya melindungi jalan pintas itu. Model tidak pernah
+    dihadapkan ke sampel yang MUSTAHIL dijawab pakai warna, jadi dia tidak
+    pernah terpaksa belajar angka dan pola.
+
+    Kelompok ini menyediakan sampel seperti itu:
+      - ToGray            : nol informasi warna, satu-satunya jalan adalah pola
+      - desaturasi kuat   : uang pudar / cahaya redup, warna nyaris hilang
+      - hue lebar         : warna ada tapi BOHONG, jadi tidak bisa dipercaya
+
+    EKSPEKTASI: akurasi training akan TURUN di epoch-epoch awal dibanding
+    sebelumnya. Itu tandanya bekerja, bukan tandanya rusak. Yang harus naik
+    adalah metrik COLOR-STRESS di 01_train.py (akurasi pada test grayscale).
+    Target realistis: dari 15% naik ke setidaknya 55-65%.
+    """
+    p = _preset(strength)
+
+    return A.OneOf([
+        # Nol warna. Sampel ini cuma bisa dijawab lewat angka, potret, dan pola.
+        A.ToGray(p=1.0),
+        # Warna nyaris hilang: uang pudar, lampu remang, sensor HP murah.
+        A.HueSaturationValue(hue_shift_limit=10,
+                             sat_shift_limit=(-75, -40),
+                             val_shift_limit=20, p=1.0),
+        # Warna ADA tapi digeser jauh: melatih model tidak percaya warna mentah.
+        # Sengaja tidak dipakai sesering dua di atas (bobot OneOf sama rata,
+        # jadi masing-masing sekitar sepertiga dari p["decolor"]).
+        A.HueSaturationValue(hue_shift_limit=30, sat_shift_limit=35,
+                             val_shift_limit=20, p=1.0),
+    ], p=p["decolor"])
 
 
 def build_geometric_transform(strength: str = "medium"):
@@ -366,11 +440,26 @@ def build_photometric_transform(strength: str = "medium"):
             A.GaussNoise(std_range=(0.03, 0.12), p=1.0),
             A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=1.0),
         ], p=p["optic"] * 0.8),
-        A.Downscale(scale_range=(0.35, 0.75),
+        # p dinaikkan 0.28 -> 0.50: ini yang paling menentukan apakah sampel
+        # sampai ke tingkat ketajaman foto HP kelas bawah.
+        A.Downscale(scale_range=(0.30, 0.75),
                     interpolation_pair={"downscale": cv2.INTER_AREA,
                                         "upscale": cv2.INTER_LINEAR},
-                    p=0.28),
-        A.ImageCompression(quality_range=(30, 88), p=0.45),
+                    p=0.50),
+        A.ImageCompression(quality_range=(25, 88), p=0.55),
+
+        # CLAHE sebagai AUGMENTASI, bukan preprocessing tetap.
+        # Diukur: memakai CLAHE sebagai preprocessing tetap saat inferensi
+        # justru MENURUNKAN akurasi (80.5% -> 75.2% pada clip=2, 69.5% pada
+        # clip=3), karena dia mengganggu relasi warna lewat channel L di LAB.
+        # Sebagai augmentasi berprobabilitas kecil dia aman dan berguna: banyak
+        # HP menerapkan penajaman lokal sendiri di pipeline kameranya.
+        A.CLAHE(clip_limit=(1.0, 3.0), tile_grid_size=(8, 8), p=0.15),
+
+        # Anti jalan-pintas warna. Ditaruh PALING AKHIR supaya berlaku pada
+        # adegan yang sudah lengkap (uang + latar + cahaya), bukan cuma
+        # pada lembar uangnya.
+        build_decolor_group(strength),
     ], p=1.0)
 
 
@@ -446,11 +535,15 @@ def build_train_transform(strength: str = "medium"):
             A.GaussNoise(std_range=(0.03, 0.12), p=1.0),
             A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=1.0),
         ], p=p["optic"] * 0.8),
-        A.Downscale(scale_range=(0.35, 0.75),
+        A.Downscale(scale_range=(0.30, 0.75),
                     interpolation_pair={"downscale": cv2.INTER_AREA,
                                         "upscale": cv2.INTER_LINEAR},
-                    p=0.28),
-        A.ImageCompression(quality_range=(30, 88), p=0.45),
+                    p=0.50),
+        A.ImageCompression(quality_range=(25, 88), p=0.55),
+        A.CLAHE(clip_limit=(1.0, 3.0), tile_grid_size=(8, 8), p=0.15),
+
+        # ── E. Anti jalan-pintas warna ────────────────────────────────────────
+        build_decolor_group(strength),
     ], p=1.0)
 
 
@@ -462,6 +555,21 @@ def build_eval_transform():
     if not _HAS_ALBUMENTATIONS:
         raise ImportError("albumentations belum terinstall.")
     return A.Compose([])
+
+
+def build_color_stress_transform():
+    """
+    Test set COLOR-STRESS: warna dibuang total, sisanya dibiarkan apa adanya.
+
+    Ini regression test untuk jalan pintas warna. Model yang benar-benar
+    membaca angka nominal harus tetap jauh di atas tebak acak (14.3% untuk
+    7 kelas) di sini. Model lama dapat 15.2%, praktis tebak acak.
+
+    Angka ini yang harus kamu pantau setelah retrain, BUKAN akurasi test biasa.
+    """
+    if not _HAS_ALBUMENTATIONS:
+        raise ImportError("albumentations belum terinstall.")
+    return A.Compose([A.ToGray(p=1.0)], p=1.0)
 
 
 def build_hard_eval_transform(seed_offset: int = 0):

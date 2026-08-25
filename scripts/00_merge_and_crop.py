@@ -317,7 +317,8 @@ def collect_from_class_folders(
         files = sorted(
             f for f in cls_dir.rglob("*") if f.suffix.lower() in IMG_EXTENSIONS
         )
-        print(f"   [{origin}/{class_name}] {len(files)} foto manual")
+        print(f"   [{origin}/{class_name}] {len(files)} foto manual "
+              f"(ambang blur {min_blur})")
 
         for f in files:
             img = cv2.imread(str(f))
@@ -329,6 +330,7 @@ def collect_from_class_folders(
                 continue
             if min_blur > 0 and blur_score(img) < min_blur:
                 stats["too_blurry"] += 1
+                stats["too_blurry_extra"] += 1
                 continue
 
             h = phash_64(img)
@@ -458,7 +460,17 @@ def main():
     ap.add_argument("--min-crop-size", type=int, default=48,
                     help="Sisi terpendek minimum crop (px)")
     ap.add_argument("--min-blur", type=float, default=25.0,
-                    help="Ambang variance of Laplacian; 0 = matikan filter blur")
+                    help="Ambang variance of Laplacian untuk crop dari dataset "
+                         "DETEKSI; 0 = matikan filter blur")
+    ap.add_argument("--min-blur-extra", type=float, default=3.0,
+                    help="Ambang blur TERPISAH untuk --extra-dirs. Default "
+                         "sengaja jauh lebih longgar (3.0) daripada --min-blur. "
+                         "Alasannya: foto HP kelas bawah yang kamu ambil "
+                         "sendiri punya variance of Laplacian sekitar 8-19, "
+                         "jadi ambang 25 akan MEMBUANG 100% foto itu tanpa "
+                         "pesan apa pun. Padahal justru foto seperti itulah "
+                         "yang paling kamu butuhkan di train set, karena itu "
+                         "yang gagal di lapangan. 0 = matikan.")
     ap.add_argument("--max-side", type=int, default=640,
                     help="Batas sisi terpanjang crop yang disimpan")
     ap.add_argument("--dedup-threshold", type=int, default=4,
@@ -513,7 +525,7 @@ def main():
         print(f"\nMemproses folder manual: {ex_dir.name}")
         collect_from_class_folders(
             ex_dir, staging_dir, deduper, args.min_crop_size,
-            args.min_blur, args.max_side, records, stats,
+            args.min_blur_extra, args.max_side, records, stats,
         )
 
     if not records:

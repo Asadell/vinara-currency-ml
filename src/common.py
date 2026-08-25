@@ -174,6 +174,18 @@ def hamming(a: int, b: int) -> int:
     return bin(a ^ b).count("1")
 
 
+def _hash_bands(h: int, n_bands: int) -> list[tuple[int, int]]:
+    """Pecah hash 64-bit jadi n_bands potongan. Return [(band_id, nilai), ...]."""
+    out = []
+    start = 0
+    for b in range(n_bands):
+        width = (64 - start) // (n_bands - b)
+        val = (h >> start) & ((1 << width) - 1)
+        out.append((b, val))
+        start += width
+    return out
+
+
 def dedup_by_phash(
     items: list,
     hash_fn,
@@ -182,40 +194,69 @@ def dedup_by_phash(
     """
     Buang near-duplicate dari list item berbasis perceptual hash.
 
-    Pakai bucketing 16-bit prefix supaya tidak O(n^2) penuh.
-    Untuk dataset < 100k gambar ini cukup cepat.
+    PERBAIKAN BUG (versi lama bocor sekitar 70%):
+
+    Versi lama mem-bucket dengan `h >> 48`, yaitu 16 bit TERATAS saja, lalu
+    hanya membandingkan di dalam bucket yang sama. Untuk threshold=4, peluang
+    keempat bit yang berbeda kebetulan semuanya jatuh di 48 bit bawah adalah
+
+        C(48,4) / C(64,4) = 4.669.920 / 15.249.024 = 0,306
+
+    jadi sekitar 69% near-duplicate TIDAK PERNAH dibandingkan dan lolos.
+    Komentar di versi lama juga menjanjikan "fallback cek linear kalau bucket
+    kosong", tapi kodenya tidak pernah melakukan itu.
+
+    Ini serius karena seluruh premis pipeline ini adalah "akurasi 99,5% kamu
+    palsu gara-gara kebocoran". Dedup yang bocor membuat angka evaluasi tetap
+    tidak jujur, dengan cara yang tidak kelihatan.
+
+    Versi baru pakai multi-index LSH dan EKSAK untuk jarak <= threshold:
+    hash dipecah jadi (threshold + 1) band. Kalau dua hash berbeda paling
+    banyak `threshold` bit, menurut pigeonhole setidaknya SATU band pasti
+    identik, jadi pasangan itu dijamin masuk daftar kandidat. Kandidat lalu
+    diverifikasi dengan jarak Hamming sebenarnya.
 
     Args:
         items: list item apa pun
         hash_fn: fungsi item -> int hash 64-bit
         threshold: jarak Hamming maksimum yang dianggap duplikat
-                   (0 = identik persis, 4-6 = near-duplicate, >10 = beda)
+                   (0 = identik persis, 4-6 = near-duplicate, >10 = beda,
+                   negatif = matikan dedup)
     Returns:
         (items_unik, jumlah_dibuang)
     """
-    buckets: dict[int, list[int]] = {}
+    if threshold < 0:
+        return list(items), 0
+
+    n_bands = min(64, max(1, threshold + 1))
+    buckets: dict[tuple[int, int], list[int]] = {}
     kept = []
     removed = 0
 
     for item in items:
         h = hash_fn(item)
-        # Cek beberapa bucket tetangga supaya near-dupe lintas bucket ketangkap
-        candidate_keys = {h >> 48}
+        bands = _hash_bands(h, n_bands)
+
         is_dup = False
-        for key in candidate_keys:
-            for other in buckets.get(key, []):
+        seen: set[int] = set()
+        for key in bands:
+            for other in buckets.get(key, ()):
+                if other in seen:
+                    continue
+                seen.add(other)
                 if hamming(h, other) <= threshold:
                     is_dup = True
                     break
             if is_dup:
                 break
 
-        # Fallback: cek linear terhadap semua hash kalau bucket kosong
-        if not is_dup:
-            buckets.setdefault(h >> 48, []).append(h)
-            kept.append(item)
-        else:
+        if is_dup:
             removed += 1
+            continue
+
+        for key in bands:
+            buckets.setdefault(key, []).append(h)
+        kept.append(item)
 
     return kept, removed
 

@@ -69,6 +69,7 @@ from tensorflow.keras import layers  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.common import CLASS_ORDER, CLASS_TO_SPOKEN, NUM_CLASSES  # noqa: E402
 from src.data import (  # noqa: E402
+    AUG_FAILURES,
     build_eval_dataset,
     build_train_dataset,
 )
@@ -77,6 +78,7 @@ from src.framing import SceneFramer  # noqa: E402
 
 try:
     from src.augment import (
+        build_color_stress_transform,
         build_geometric_transform,
         build_hard_eval_transform,
         build_photometric_transform,
@@ -434,8 +436,15 @@ def main():
                     help="Bekukan N layer backbone paling awal")
     ap.add_argument("--no-balanced", action="store_true",
                     help="Matikan balanced sampling per kelas")
-    ap.add_argument("--no-ema", action="store_true",
-                    help="Matikan exponential moving average bobot")
+    ap.add_argument("--ema", action="store_true",
+                    help="Nyalakan exponential moving average bobot. MATI secara "
+                         "default karena di pipeline lama dia tidak pernah "
+                         "benar-benar terpakai: ModelCheckpoint menyimpan bobot "
+                         "MENTAH, dan EarlyStopping(restore_best_weights=True) "
+                         "menimpa bobot EMA di akhir fit(). Sudah diverifikasi "
+                         "di TF 2.21. Kalau flag ini dinyalakan, "
+                         "restore_best_weights otomatis dimatikan supaya bobot "
+                         "EMA benar-benar jadi model akhir.")
     ap.add_argument("--patience", type=int, default=12)
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
@@ -604,7 +613,7 @@ def main():
                 int(total_steps_2 * args.warmup_frac)
             ),
             weight_decay=args.weight_decay,
-            use_ema=not args.no_ema,
+            use_ema=args.ema,
             ema_momentum=0.999,
         ),
         loss=loss_fn,
@@ -625,7 +634,9 @@ def main():
             keras.callbacks.EarlyStopping(
                 monitor="val_acc", mode="max",
                 patience=args.patience,
-                restore_best_weights=True, verbose=1,
+                # Dengan EMA, bobot akhir adalah rata-ratanya. Mengembalikan
+                # checkpoint terbaik justru MEMBUANG hasil EMA (terverifikasi).
+                restore_best_weights=not args.ema, verbose=1,
             ),
             keras.callbacks.CSVLogger(str(out_dir / "history_stage2.csv")),
         ],
@@ -634,11 +645,17 @@ def main():
     histories.append(h2)
 
     # ── Muat bobot terbaik ──
-    best_path = out_dir / "best_stage2.keras"
-    if not best_path.exists():
-        best_path = out_dir / "best_stage1.keras"
-    print(f"\nMemuat model terbaik: {best_path}")
-    model = keras.models.load_model(str(best_path), compile=False)
+    if args.ema:
+        # Model in-memory sudah memegang bobot EMA (finalize_variable_values
+        # dipanggil di akhir fit, dan restore_best_weights sengaja dimatikan).
+        print("\nMemakai bobot EMA hasil akhir fine-tuning (bukan checkpoint).")
+        model.save(str(out_dir / "best_stage2_ema.keras"))
+    else:
+        best_path = out_dir / "best_stage2.keras"
+        if not best_path.exists():
+            best_path = out_dir / "best_stage1.keras"
+        print(f"\nMemuat model terbaik: {best_path}")
+        model = keras.models.load_model(str(best_path), compile=False)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  EVALUASI
@@ -676,6 +693,42 @@ def main():
             print("  Cukup baik, tapi masih ada ruang perbaikan.")
         else:
             print("  Bagus, model relatif stabil di kondisi buruk.")
+
+    # COLOR-STRESS EVAL: warna dibuang total.
+    #
+    # INI METRIK PALING PENTING DI SELURUH SCRIPT untuk kasus 20rb vs 50rb.
+    #
+    # Model pipeline lama diukur: 80.5% normal, 15.2% grayscale, sementara
+    # tebak acak 7 kelas = 14.3%. Artinya dia tidak pernah membaca angka
+    # nominal sama sekali, cuma mencocokkan histogram warna. Akurasi TEST biasa
+    # tidak akan pernah menangkap ini karena di test set warnanya juga utuh.
+    if HAS_ALBU:
+        print("\n  Menyiapkan COLOR-STRESS TEST (warna dibuang total)...")
+        gray_ds, _ = build_eval_dataset(
+            data_dir, "test", args.img_size, args.batch_size,
+            transform=build_color_stress_transform(),
+        )
+        gray_logits, gray_true = predict_logits(model, gray_ds)
+        results["test_grayscale"] = print_eval(
+            "COLOR-STRESS TEST (grayscale, warna dibuang)",
+            gray_logits, gray_true
+        )
+
+        chance = 1.0 / NUM_CLASSES
+        gacc = results["test_grayscale"]["accuracy"]
+        print(f"\n  Tebak acak {NUM_CLASSES} kelas   : {chance * 100:.1f}%")
+        print(f"  Akurasi tanpa warna    : {gacc * 100:.2f}%")
+        if gacc < chance * 1.6:
+            print("  GAGAL. Model masih classifier warna murni: buang warnanya "
+                  "dan dia menebak acak. Dia belum membaca angka nominal, jadi "
+                  "20rb vs 50rb akan tetap ketuker di cahaya redup.")
+            print("  Naikkan `decolor` di src/augment.py _PRESETS, atau pakai "
+                  "--aug-strength heavy.")
+        elif gacc < 0.55:
+            print("  Membaik, tapi warna masih jadi tumpuan utama.")
+        else:
+            print("  Bagus. Model punya isyarat non-warna yang nyata "
+                  "(angka/pola/potret), bukan cuma histogram warna.")
 
     # FRAMING EVAL: uang bersih di dalam frame kamera pada skala kecil.
     # Ini metrik yang paling relevan dengan kegagalan lapangan - akurasi
@@ -746,6 +799,21 @@ def main():
     }
     with open(out_dir / "class_info.json", "w", encoding="utf-8") as f:
         json.dump(class_info, f, indent=2)
+    # Laporan kesehatan augmentasi. Kalau rasionya tinggi, seluruh augmentasi
+    # praktis tidak jalan dan semua angka di atas menyesatkan.
+    aug_stats = AUG_FAILURES.summary()
+    results["augmentation_health"] = aug_stats
+    if aug_stats["total"]:
+        print(f"\n  Kesehatan augmentasi: {aug_stats['failed']}/"
+              f"{aug_stats['total']} gagal "
+              f"({aug_stats['ratio'] * 100:.2f}%)")
+        if aug_stats["ratio"] > 0.02:
+            print(f"  PERINGATAN: augmentasi banyak yang gagal dan gambar "
+                  f"dipakai apa adanya.\n"
+                  f"  Error pertama: {aug_stats['first_error']}\n"
+                  f"  Semua angka evaluasi di atas TIDAK bisa dipercaya "
+                  f"sampai ini beres.")
+
     with open(out_dir / "results.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     (out_dir / "labels.txt").write_text("\n".join(CLASS_ORDER) + "\n",

@@ -32,6 +32,8 @@ Poin desain penting:
 
 from __future__ import annotations
 
+import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +43,71 @@ from .common import CLASS_ORDER, IMG_EXTENSIONS, NUM_CLASSES
 from .framing import SceneFramer
 
 AUTOTUNE = tf.data.AUTOTUNE
+
+
+# ─── Pemantau kegagalan augmentasi ─────────────────────────────────────────────
+#
+# Semua map-fn augmentasi membungkus transform Albumentations dalam try/except
+# supaya satu gambar bermasalah tidak menghentikan training berjam-jam. Itu
+# benar, TAPI versi lama menelan error tanpa jejak sama sekali.
+#
+# Bahayanya nyata: kode ini memakai API albumentations yang relatif baru
+# (`fill`, `fill_mask`, `num_holes_range`, `std_range`, `scale_range`,
+# `interpolation_pair`). Kalau versi yang terinstall sedikit berbeda, SETIAP
+# panggilan transform melempar exception, augmentasi mati total, dan training
+# tetap berjalan mulus tanpa satu pun pesan. Kamu baru sadar berminggu-minggu
+# kemudian saat modelnya rapuh di lapangan dan tidak tahu kenapa.
+#
+# Sekarang kegagalan dihitung dan dilaporkan.
+
+class _AugFailureMonitor:
+    """Hitung kegagalan transform, laporkan sekali-sekali (thread-safe)."""
+
+    def __init__(self, warn_at: int = 32, warn_ratio: float = 0.02):
+        self._lock = threading.Lock()
+        self.total = 0
+        self.failed = 0
+        self.warn_at = warn_at
+        self.warn_ratio = warn_ratio
+        self._next_warn = warn_at
+        self.first_error = ""
+
+    def record(self, ok: bool, err: str = "") -> None:
+        with self._lock:
+            self.total += 1
+            if ok:
+                return
+            self.failed += 1
+            if not self.first_error:
+                self.first_error = err
+            if self.failed < self._next_warn:
+                return
+            ratio = self.failed / max(1, self.total)
+            self._next_warn *= 2
+            if ratio < self.warn_ratio:
+                return
+            print(
+                f"\n[AUGMENTASI] {self.failed}/{self.total} sampel "
+                f"({ratio * 100:.1f}%) GAGAL diaugmentasi dan dipakai apa "
+                f"adanya.\n"
+                f"              Error pertama: {self.first_error}\n"
+                f"              Kalau rasionya tinggi, augmentasi kamu praktis "
+                f"MATI. Cek versi albumentations "
+                f"(requirements.txt minta >= 1.4.15).",
+                file=sys.stderr, flush=True,
+            )
+
+    def summary(self) -> dict:
+        with self._lock:
+            return {
+                "total": self.total,
+                "failed": self.failed,
+                "ratio": self.failed / max(1, self.total),
+                "first_error": self.first_error,
+            }
+
+
+AUG_FAILURES = _AugFailureMonitor()
 
 
 # ─── Scanning ──────────────────────────────────────────────────────────────────
@@ -125,9 +192,12 @@ def make_albumentations_map_fn(transform, img_size: int):
         # img_np: uint8 HWC RGB ukuran asli
         try:
             out = transform(image=img_np)["image"]
-        except Exception:
+            AUG_FAILURES.record(True)
+        except Exception as exc:
             # Kalau satu transform gagal (misal gambar terlalu kecil untuk
-            # kernel blur), jangan hentikan training. Pakai gambar asli.
+            # kernel blur), jangan hentikan training. Pakai gambar asli,
+            # TAPI catat supaya kegagalan sistematis tidak lolos diam-diam.
+            AUG_FAILURES.record(False, f"{type(exc).__name__}: {exc}")
             out = img_np
         return np.ascontiguousarray(out, dtype=np.uint8)
 
@@ -219,9 +289,12 @@ def make_scene_augment_map_fn(
             scene = framer.compose(note, mask, rng, scale_range=scale)
 
             scene = photo_transform(image=scene)["image"]
-        except Exception:
+            AUG_FAILURES.record(True)
+        except Exception as exc:
             # Satu transform gagal (gambar terlalu kecil untuk kernel blur,
-            # mask kosong, dll) tidak boleh menghentikan training.
+            # mask kosong, dll) tidak boleh menghentikan training. Tapi kalau
+            # SEMUA gagal, simulasi framing praktis mati dan kamu harus tahu.
+            AUG_FAILURES.record(False, f"{type(exc).__name__}: {exc}")
             scene = img_np
         return np.ascontiguousarray(scene, dtype=np.uint8)
 
