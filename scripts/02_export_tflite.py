@@ -115,11 +115,28 @@ def load_any_model(path: str) -> tf.keras.Model:
     tf.keras.mixed_precision.set_global_policy("float32")
     p = Path(path)
     if p.suffix == ".keras" or p.suffix == ".h5":
-        model = tf.keras.models.load_model(str(p), compile=False)
-        inp = tf.keras.Input(shape=(224, 224, 3), dtype="float32", name="image")
-        out = model(inp)
-        out = tf.keras.layers.Activation("linear", dtype="float32", name="float32_out")(out)
-        return tf.keras.Model(inputs=inp, outputs=out, name="rupiah_infer_float32")
+        trained_model = tf.keras.models.load_model(str(p), compile=False)
+        try:
+            base = tf.keras.applications.MobileNetV2(
+                input_shape=(224, 224, 3), include_top=False, weights=None, alpha=1.0
+            )
+            inputs = tf.keras.Input(shape=(224, 224, 3), name="image", dtype="float32")
+            x = base(inputs, training=False)
+            x = tf.keras.layers.GlobalAveragePooling2D(name="gap")(x)
+            x = tf.keras.layers.Dropout(0.35, name="drop1")(x)
+            x = tf.keras.layers.Dense(128, use_bias=False, name="fc1")(x)
+            x = tf.keras.layers.BatchNormalization(name="fc1_bn")(x)
+            x = tf.keras.layers.Activation("relu", name="fc1_relu")(x)
+            x = tf.keras.layers.Dropout(0.35 * 0.6, name="drop2")(x)
+            logits = tf.keras.layers.Dense(NUM_CLASSES, name="logits")(x)
+            softmax_out = tf.keras.layers.Activation("softmax", name="probs", dtype="float32")(logits)
+            float32_model = tf.keras.Model(inputs=inputs, outputs=softmax_out, name="rupiah_infer_float32")
+            float32_model.set_weights(trained_model.get_weights())
+            print("   ✅ Berhasil merekonstruksi model ke float32 murni untuk TFLite converter.")
+            return float32_model
+        except Exception as e:
+            print(f"   (rekonstruksi float32 gagal: {e}; memakai model mentah)")
+            return trained_model
     return tf.keras.layers.TFSMLayer(str(p), call_endpoint="serve")
 
 
