@@ -34,15 +34,23 @@ print("DOWNLOADING 16 ROBOFLOW RUPIAH/MONEY DATASETS")
 print("=" * 60)
 for workspace, project, version, fmt, folder_name in rupiah_datasets:
     target = os.path.join(BASE_DIR, folder_name)
-    print(f"\n>>> Downloading {workspace}/{project} (v{version}) ...")
+    print(f"\n>>> Downloading {workspace}/{project} (default v{version}) ...")
     try:
         proj = rf.workspace(workspace).project(project)
-        try:
-            ver = proj.version(version)
-        except Exception:
-            ver = proj.version(1)
-        ver.download(fmt, location=target)
-        print(f"✅ Selesai: {folder_name}")
+        ver = None
+        # Try requested version first, then fallback to 1..10
+        for v in [version, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+            try:
+                ver = proj.version(v)
+                print(f"    (menggunakan versi v{v})")
+                break
+            except Exception:
+                continue
+        if ver:
+            ver.download(fmt, location=target)
+            print(f"✅ Selesai: {folder_name}")
+        else:
+            print(f"!!! FAILED: {workspace}/{project} - tidak ada versi valid yang ditemukan")
     except Exception as e:
         print(f"!!! FAILED: {workspace}/{project} - {e}")
 
