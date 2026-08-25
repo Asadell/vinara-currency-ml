@@ -76,14 +76,80 @@ jauh lebih lemah (tanpa elastic, perspective, simulasi lipatan, simulasi kusut).
 
 ## Alur lengkap
 
+---
+
+## Dataset Sumber (16 Dataset Roboflow Combined Mega-Dataset)
+
+Pipeline ini secara otomatis mengunduh, menggabungkan, memotong bounding box (crop), dan menstandardisasi **16 dataset Roboflow** (3 dataset awal + 13 dataset tambahan) untuk mencakup variasi emisi baru (2022), emisi lama (2016), kondisi lecek, pencahayaan minim, serta sudut pengambilan gambar yang beragam:
+
+### 3 Dataset Baseline Awal
+1. `skripsi-3kth2/deteksi-mata-uang-rupiah-nerog (v2)`
+2. `rupiah-detector/rupiah-detector-qzmb7 (v2)`
+3. `workspace1-u35mt/money-detection-valid (v4)`
+
+### 13 Dataset Tambahan Baru
+4. `moneysaver-yolo/deteksi-uang-s0pfe` - Deteksi uang Rupiah
+5. `skripsi-swuyl/detetksi-keaslian-uang` - Deteksi fisik & nominal Rupiah
+6. `yoloai-3iuvz/uang_deteksi` - Deteksi multi-nominal Rupiah
+7. `amndan/uangbaru2022` - Khusus emisi baru Rupiah 2022
+8. `jemy07s-workspace/tubes-psi-ydfzm` - Dataset Rupiah beragam kondisi
+9. `adelias-workspace/modeluangv2-t1lk9` - Dataset model Rupiah v2
+10. `zannho/rupiah-detection-o3agm` - Deteksi Rupiah multi-variasi
+11. `muhammad-aidil-wlsfe/cnnyolo-hhphe` - Dataset CNN/YOLO Rupiah
+12. `cahyadin/money_detection-pnnd7` - Deteksi uang Rupiah
+13. `4ia17ottos-workspace/moneydetection-uetq8` - Deteksi Rupiah variasi sudut
+14. `tes-nms6d/uang-kertas-2022-dan-logam-2016` - Uang kertas 2022 & logam 2016
+15. `4ia17ottos-workspace/uang_baru` - Uang kertas emisi 2022
+16. `project-binus/rupiah-detection-d1vbz` - Dataset Rupiah project Binus
+
+### Normalisasi Label Otomatis (`normalize_class_name`)
+Karena setiap dataset menggunakan alias label yang berbeda-beda (`5k`, `5ribu`, `Rp 5.000`, `5000 rupiah`, `lima ribu`, `100k`, `seratus ribu`, dll.), script `00_merge_and_crop.py` sekarang **secara otomatis membaca `data.yaml`** tiap dataset dan memetakan semua sinonim label ke **7 nominal standar**:
+
+| Target Standar | Sinonim / Alias yang Dinormalisasi |
+|---|---|
+| `1000` | `1k`, `1ribu`, `1.000`, `seribu`, `1000`, `Rp 1.000` |
+| `2000` | `2k`, `2ribu`, `2.000`, `dua ribu`, `2000`, `Rp 2.000` |
+| `5000` | `5k`, `5ribu`, `5.000`, `lima ribu`, `5000`, `Rp 5.000` |
+| `10000` | `10k`, `10ribu`, `10.000`, `sepuluh ribu`, `10000`, `Rp 10.000` |
+| `20000` | `20k`, `20ribu`, `20.000`, `dua puluh ribu`, `20000`, `Rp 20.000` |
+| `50000` | `50k`, `50ribu`, `50.000`, `lima puluh ribu`, `50000`, `Rp 50.000` |
+| `100000` | `100k`, `100ribu`, `100.000`, `seratus ribu`, `100000`, `Rp 100.000` |
+
+*Catatan: Label koin/logam (`500 koin`, `1000_koin`), mata uang asing, atau objek luar secara otomatis dikesampingkan agar fokus pada 7 nominal uang kertas Rupiah.*
+
+---
+
+## Setup & Download di Remote GPU (Vast.ai)
+
+> [!IMPORTANT]
+> **Selalu jalankan download dan training di Remote GPU (Vast.ai), BUKAN di laptop lokal.** Laptop lokal hanya untuk mengedit code dan dokumentasi.
+
+### Cara Download & Crop Dataset di VPS GPU:
+
+```bash
+# 1. SSH ke GPU
+ssh -i ~/.ssh/id_vastai -p 37281 root@1.193.137.175
+
+# 2. Masuk ke folder repo & pull update code terbaru
+cd /root/vinara-currency-ml
+git pull origin develop
+
+# 3. Jalankan script download (pastikan ROBOFLOW_API_KEY sudah diset)
+export ROBOFLOW_API_KEY="YOUR_ROBOFLOW_API_KEY"
+python3 scripts/download_rupiah.py
+
+# 4. Merge, crop, dedup, dan split 16 dataset
+python3 scripts/00_merge_and_crop.py
+```
+
+---
+
+## Alur lengkap
+
 ### Step 0 - Merge, crop, dedup, split
 
 ```bash
 python scripts/00_merge_and_crop.py \
-    --datasets ~/datasets/rf-rupiah-detector \
-               ~/datasets/rf-money-detection-valid \
-               ~/datasets/rf-rupiah-skripsi \
-    --extra-dirs ~/foto_manual/emisi2016 ~/foto_manual/emisi2022 \
     --output data/classification \
     --val-split 0.15 --test-split 0.10 \
     --dedup-threshold 4 \
@@ -98,6 +164,7 @@ Format `--extra-dirs`: folder yang isinya sudah tersusun per nominal.
 ~/foto_manual/emisi2016/
 ├── 1000/   foto1.jpg foto2.jpg ...
 ├── 2000/
+```
 └── ... (100000/)
 ```
 

@@ -206,6 +206,73 @@ class PhashDeduper:
 
 # ─── Pengumpulan ───────────────────────────────────────────────────────────────
 
+import re
+import yaml
+
+def normalize_class_name(raw_label: str) -> str | None:
+    """
+    Standardize all raw dataset class names into one of 7 standard nominal strings:
+    ['1000', '2000', '5000', '10000', '20000', '50000', '100000']
+    """
+    if not raw_label:
+        return None
+    s = str(raw_label).lower().strip()
+    
+    if any(x in s for x in ['koin', 'logam', 'coin', 'other', 'background', 'belakang', 'depan_belakang']):
+        if not any(x in s for x in ['1000', '2000', '5000', '10000', '20000', '50000', '100000', '1k', '2k', '5k', '10k', '20k', '50k', '100k']):
+            return None
+        
+    if any(x in s for x in ['seratus', '100k', '100ribu', '100.000', '100000']):
+        return '100000'
+    if any(x in s for x in ['lima puluh', '50k', '50ribu', '50.000', '50000']):
+        return '50000'
+    if any(x in s for x in ['dua puluh', '20k', '20ribu', '20.000', '20000']):
+        return '20000'
+    if any(x in s for x in ['sepuluh', '10k', '10ribu', '10.000', '10000']):
+        return '10000'
+    if any(x in s for x in ['lima', '5k', '5ribu', '5.000', '5000']):
+        return '5000'
+    if any(x in s for x in ['dua', '2k', '2ribu', '2.000', '2000']):
+        return '2000'
+    if any(x in s for x in ['seribu', '1k', '1ribu', '1.000', '1000']):
+        return '1000'
+        
+    digits = re.sub(r'[^\d]', '', s)
+    if digits in ['1000', '2000', '5000', '10000', '20000', '50000', '100000']:
+        return digits
+    mapping_short = {'100': '100000', '50': '50000', '20': '20000', '10': '10000', '5': '5000', '2': '2000', '1': '1000'}
+    return mapping_short.get(digits, None)
+
+
+def load_dataset_class_mapping(dataset_dir: Path) -> dict[int, str]:
+    """Membaca data.yaml dan mencocokkan setiap indeks kelas ke nominal standar."""
+    yaml_path = dataset_dir / "data.yaml"
+    mapping = {}
+    if yaml_path.exists():
+        try:
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+                names = data.get("names", [])
+                if isinstance(names, list):
+                    for idx, name in enumerate(names):
+                        norm = normalize_class_name(name)
+                        if norm:
+                            mapping[idx] = norm
+                elif isinstance(names, dict):
+                    for idx, name in names.items():
+                        norm = normalize_class_name(name)
+                        if norm:
+                            mapping[int(idx)] = norm
+        except Exception as e:
+            print(f"⚠️ Gagal membaca {yaml_path}: {e}")
+            
+    if not mapping:
+        mapping = ROBOFLOW_IDX_TO_CLASS
+    return mapping
+
+
+# ─── Pengumpulan ───────────────────────────────────────────────────────────────
+
 def collect_from_detection_dataset(
     dataset_dir: Path,
     staging_dir: Path,
@@ -219,6 +286,7 @@ def collect_from_detection_dataset(
 ) -> None:
     """Scan satu folder dataset Roboflow YOLO, crop tiap bbox, simpan ke staging."""
     ds_name = dataset_dir.name
+    class_mapping = load_dataset_class_mapping(dataset_dir)
 
     for split in ("train", "valid", "val", "test"):
         img_dir = dataset_dir / split / "images"
@@ -248,7 +316,6 @@ def collect_from_detection_dataset(
                 stats["unreadable"] += 1
                 continue
 
-            # Satu foto sumber = satu grup. Ini kunci anti-leakage.
             group_key = f"{ds_name}::{split}::{img_path.stem}"
 
             for line_i, line in enumerate(lines):
@@ -256,11 +323,11 @@ def collect_from_detection_dataset(
                 if parsed is None:
                     continue
                 cls_idx, x_min, y_min, x_max, y_max = parsed
-                if cls_idx not in ROBOFLOW_IDX_TO_CLASS:
+                if cls_idx not in class_mapping:
                     stats["unknown_class"] += 1
                     continue
 
-                class_name = ROBOFLOW_IDX_TO_CLASS[cls_idx]
+                class_name = class_mapping[cls_idx]
                 crop = crop_bbox(img, x_min, y_min, x_max, y_max, base_padding)
 
                 if crop.size == 0 or min(crop.shape[:2]) < min_crop_size:
