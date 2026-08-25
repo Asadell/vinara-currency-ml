@@ -247,32 +247,142 @@ class CurrencyWear(A.ImageOnlyTransform if _HAS_ALBUMENTATIONS else object):
 #  Pipeline utama
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_train_transform(strength: str = "medium"):
-    """
-    Bangun pipeline Albumentations untuk training.
+_PRESETS = {
+    "light":  dict(geo=0.35, wear=0.35, light=0.45, optic=0.30),
+    "medium": dict(geo=0.60, wear=0.65, light=0.75, optic=0.55),
+    "heavy":  dict(geo=0.80, wear=0.85, light=0.90, optic=0.75),
+}
 
-    Args:
-        strength: "light" | "medium" | "heavy"
-            light  -> buat sanity check / dataset sudah beragam
-            medium -> DEFAULT, rekomendasi untuk kasus GUIDIO
-            heavy  -> kalau train-set kamu benar-benar cuma uang studio bersih
 
-    Returns:
-        albumentations.Compose yang menerima & mengembalikan uint8 HWC RGB
-    """
+def _preset(strength: str) -> dict:
     if not _HAS_ALBUMENTATIONS:
         raise ImportError(
             "albumentations belum terinstall. Jalankan: pip install albumentations"
         )
+    if strength not in _PRESETS:
+        raise ValueError(f"strength harus salah satu dari {list(_PRESETS)}")
+    return _PRESETS[strength]
 
-    presets = {
-        "light":  dict(geo=0.35, wear=0.35, light=0.45, optic=0.30),
-        "medium": dict(geo=0.60, wear=0.65, light=0.75, optic=0.55),
-        "heavy":  dict(geo=0.80, wear=0.85, light=0.90, optic=0.75),
-    }
-    if strength not in presets:
-        raise ValueError(f"strength harus salah satu dari {list(presets)}")
-    p = presets[strength]
+
+def build_geometric_transform(strength: str = "medium"):
+    """
+    TAHAP 2 pipeline: geometri + keausan fisik, dijalankan pada crop uang
+    SAJA dan MASK-AWARE (`transform(image=..., mask=...)`).
+
+    Mask-nya penting: setelah rotasi/perspektif kita harus tahu piksel mana
+    yang benar-benar uang, supaya `framing.compose_scene()` bisa menempel
+    uang ke latar tanpa ikut membawa segi empat hitam sisa padding.
+
+    Dipanggil pada gambar yang SUDAH diberi margin oleh
+    `framing.pad_for_rotation()`, jadi rotasi 90/180 derajat tidak lagi
+    memotong ujung uang seperti di pipeline lama.
+    """
+    p = _preset(strength)
+
+    return A.Compose([
+        # ── A. Orientasi ──────────────────────────────────────────────────────
+        # JANGAN pakai HorizontalFlip: uang bercermin menghasilkan tulisan
+        # terbalik yang tidak pernah ada di dunia nyata.
+        #
+        # RandomRotate90 SEKARANG DINYALAKAN (dulu p=0.0). Alasannya berubah:
+        # begitu adegan penuh disimulasikan, uang tegak di dalam frame
+        # portrait itu kejadian SANGAT umum - persis kasus fixture yang
+        # gagal. Aman dilakukan karena margin rotasi sudah disiapkan.
+        A.RandomRotate90(p=0.35),
+        A.Affine(
+            rotate=(-180, 180),
+            scale=(0.85, 1.15),
+            shear={"x": (-8, 8), "y": (-8, 8)},
+            translate_percent={"x": (-0.04, 0.04), "y": (-0.04, 0.04)},
+            border_mode=cv2.BORDER_CONSTANT,
+            fill=0,
+            fill_mask=0,
+            p=0.90,
+        ),
+
+        # ── B. Deformasi (lecek, terlipat, tidak rata) ────────────────────────
+        A.Perspective(scale=(0.03, 0.14), keep_size=True,
+                      border_mode=cv2.BORDER_CONSTANT, fill=0, fill_mask=0,
+                      p=p["geo"]),
+        A.OneOf([
+            A.ElasticTransform(alpha=40, sigma=8,
+                               border_mode=cv2.BORDER_CONSTANT,
+                               fill=0, fill_mask=0, p=1.0),
+            A.GridDistortion(num_steps=5, distort_limit=0.28,
+                             border_mode=cv2.BORDER_CONSTANT,
+                             fill=0, fill_mask=0, p=1.0),
+            A.OpticalDistortion(distort_limit=0.25,
+                                border_mode=cv2.BORDER_CONSTANT,
+                                fill=0, fill_mask=0, p=1.0),
+        ], p=p["geo"]),
+
+        CurrencyWear(crease_p=0.55, crumple_p=0.55, scribble_p=0.30,
+                     p=p["wear"]),
+
+        # Sobek / lubang: fill_mask=0 supaya lubangnya benar-benar tembus ke
+        # latar waktu compositing, bukan jadi kotak hitam di atas uang.
+        A.CoarseDropout(
+            num_holes_range=(1, 6),
+            hole_height_range=(0.04, 0.16),
+            hole_width_range=(0.04, 0.16),
+            fill=0,
+            fill_mask=0,
+            p=0.30,
+        ),
+    ], p=1.0)
+
+
+def build_photometric_transform(strength: str = "medium"):
+    """
+    TAHAP 4 pipeline: pencahayaan + degradasi optik, dijalankan pada
+    SELURUH ADEGAN setelah uang ditempel ke latar.
+
+    Urutan ini bukan detail kosmetik. Cahaya ruangan, guncangan tangan,
+    dan kompresi JPEG kamera mengenai seluruh foto. Kalau degradasi cuma
+    dikenakan ke lembar uang (seperti pipeline lama), uang dan latarnya
+    punya karakter noise yang berbeda - dan itu petunjuk gratis yang
+    dipakai model untuk "menemukan" uang tanpa benar-benar belajar
+    memisahkan objek dari latar.
+    """
+    p = _preset(strength)
+
+    return A.Compose([
+        A.RandomBrightnessContrast(brightness_limit=(-0.38, 0.30),
+                                   contrast_limit=(-0.30, 0.30),
+                                   p=p["light"]),
+        A.RandomGamma(gamma_limit=(55, 145), p=p["light"] * 0.8),
+        A.HueSaturationValue(hue_shift_limit=8, sat_shift_limit=28,
+                             val_shift_limit=22, p=p["light"] * 0.8),
+        A.RandomToneCurve(scale=0.22, p=0.30),
+        A.RandomShadow(shadow_roi=(0, 0, 1, 1), num_shadows_limit=(1, 3),
+                       shadow_dimension=5, p=0.35),
+
+        A.OneOf([
+            A.MotionBlur(blur_limit=(3, 9), p=1.0),
+            A.Defocus(radius=(1, 4), p=1.0),
+            A.GaussianBlur(blur_limit=(3, 7), p=1.0),
+        ], p=p["optic"]),
+        A.OneOf([
+            A.GaussNoise(std_range=(0.03, 0.12), p=1.0),
+            A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=1.0),
+        ], p=p["optic"] * 0.8),
+        A.Downscale(scale_range=(0.35, 0.75),
+                    interpolation_pair={"downscale": cv2.INTER_AREA,
+                                        "upscale": cv2.INTER_LINEAR},
+                    p=0.28),
+        A.ImageCompression(quality_range=(30, 88), p=0.45),
+    ], p=1.0)
+
+
+def build_train_transform(strength: str = "medium"):
+    """
+    Pipeline SATU TAHAP versi lama (crop rapat, tanpa simulasi adegan).
+
+    Masih dipakai sebagai jalur `--frame-prob 0`, dan untuk porsi sampel
+    yang sengaja dibiarkan berupa crop rapat supaya model tetap jago di
+    kasus ideal (uang memenuhi bingkai panduan).
+    """
+    p = _preset(strength)
 
     return A.Compose([
         # ── A. Orientasi dasar ────────────────────────────────────────────────

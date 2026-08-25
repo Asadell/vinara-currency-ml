@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Rupiah Vision — Training Pipeline (Revised)
+# Rupiah Vision - Training Pipeline (Revised)
 # MobileNetV2 Classifier -> TFLite INT8
 #
 # Usage di VPS setelah setup credentials:
@@ -23,7 +23,7 @@ else
 fi
 
 echo "======================================================================"
-echo "  Rupiah Vision Training — Revised Pipeline"
+echo "  Rupiah Vision Training - Revised Pipeline"
 echo "  Repo     : $REPO_DIR"
 echo "  Python   : $PYTHON_BIN"
 echo "======================================================================"
@@ -45,7 +45,7 @@ if [ ! -d "$DATASET_DIR/rf-rupiah-detector" ]; then
     echo -e "\n[1/5] Downloading rupiah datasets ke $DATASET_DIR ..."
     "$PYTHON_BIN" ../datasets/download_rupiah.py
 else
-    echo -e "\n[1/5] Dataset sudah ada di $DATASET_DIR — skip download"
+    echo -e "\n[1/5] Dataset sudah ada di $DATASET_DIR - skip download"
 fi
 
 # ── Step 2: Preflight check ───────────────────────────────────────────────────
@@ -92,7 +92,7 @@ if [ -f "$BEST_MODEL" ]; then
         --test-dir data/classification/test \
         --output runs/rupiah_thresholds.json
 else
-    echo "  ⚠ Trained model tidak ditemukan — skip export"
+    echo "  ⚠ Trained model tidak ditemukan - skip export"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

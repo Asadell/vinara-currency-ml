@@ -38,6 +38,7 @@ import numpy as np
 import tensorflow as tf
 
 from .common import CLASS_ORDER, IMG_EXTENSIONS, NUM_CLASSES
+from .framing import SceneFramer
 
 AUTOTUNE = tf.data.AUTOTUNE
 
@@ -178,6 +179,91 @@ def make_tf_native_augment_fn(img_size: int):
     return _fn
 
 
+def make_scene_augment_map_fn(
+    geo_transform,
+    photo_transform,
+    framer: SceneFramer,
+    img_size: int,
+    frame_prob: float = 0.75,
+    tight_scale: tuple[float, float] = (0.90, 1.0),
+):
+    """
+    Map-fn DUA TAHAP dengan simulasi framing kamera.
+
+    Alur per gambar:
+        crop rapat
+          -> pad_for_rotation()          (margin, supaya rotasi tidak memotong)
+          -> geo_transform(image, mask)  (rotasi, perspektif, lecek, sobek)
+          -> compose_scene()             (tempel ke kanvas rasio & skala acak)
+          -> photo_transform(image)      (cahaya, blur, noise, JPEG)
+          -> letterbox + normalisasi
+
+    `frame_prob` = peluang sampel dipakai sebagai ADEGAN PENUH (uang kecil
+    di dalam frame). Sisanya dikomposisi rapat (`tight_scale`) supaya model
+    tetap tajam di kasus ideal - uang mengisi bingkai panduan di layar.
+
+    Kenapa tidak 100% adegan penuh: aplikasi memang mengarahkan pengguna
+    lewat bingkai panduan, jadi crop rapat tetap distribusi yang paling
+    sering. Yang kita perbaiki adalah EKORNYA, bukan menggantinya.
+    """
+    wide_scale = framer.scale_range
+
+    def _augment_numpy(img_np):
+        rng = np.random.default_rng()
+        try:
+            padded, mask = framer.prepare(img_np)
+            out = geo_transform(image=padded, mask=mask)
+            note, mask = out["image"], out["mask"]
+
+            scale = wide_scale if rng.random() < frame_prob else tight_scale
+            scene = framer.compose(note, mask, rng, scale_range=scale)
+
+            scene = photo_transform(image=scene)["image"]
+        except Exception:
+            # Satu transform gagal (gambar terlalu kecil untuk kernel blur,
+            # mask kosong, dll) tidak boleh menghentikan training.
+            scene = img_np
+        return np.ascontiguousarray(scene, dtype=np.uint8)
+
+    def _fn(path, label):
+        img = decode_uint8(path)
+        aug = tf.numpy_function(_augment_numpy, [img], tf.uint8, stateful=True)
+        aug.set_shape([None, None, 3])
+        img = letterbox_and_normalize(aug, img_size)
+        return img, label
+
+    return _fn
+
+
+def make_scene_eval_map_fn(framer: SceneFramer, img_size: int,
+                           scale_range: tuple[float, float] = (0.30, 0.45)):
+    """
+    Map-fn evaluasi untuk "FRAMING EVAL": uang bersih ditempel ke frame
+    portrait pada skala kecil, TANPA degradasi lain.
+
+    Gunanya regression test terarah: kalau akurasi di sini jauh di bawah
+    test biasa, artinya model masih rapuh terhadap framing - persis
+    kegagalan pada fixture screenshot 720x1560.
+    """
+    def _compose_numpy(img_np):
+        rng = np.random.default_rng(abs(int(img_np.sum())) % (2 ** 31))
+        try:
+            padded, mask = framer.prepare(img_np)
+            scene = framer.compose(padded, mask, rng, scale_range=scale_range)
+        except Exception:
+            scene = img_np
+        return np.ascontiguousarray(scene, dtype=np.uint8)
+
+    def _fn(path, label):
+        img = decode_uint8(path)
+        aug = tf.numpy_function(_compose_numpy, [img], tf.uint8, stateful=True)
+        aug.set_shape([None, None, 3])
+        img = letterbox_and_normalize(aug, img_size)
+        return img, label
+
+    return _fn
+
+
 # ─── MixUp & CutMix ────────────────────────────────────────────────────────────
 
 def _sample_beta(alpha: float, shape) -> tf.Tensor:
@@ -279,6 +365,10 @@ def build_train_dataset(
     img_size: int,
     batch_size: int,
     transform=None,
+    geo_transform=None,
+    photo_transform=None,
+    framer: SceneFramer | None = None,
+    frame_prob: float = 0.75,
     balanced: bool = True,
     mixup_alpha: float = 0.2,
     cutmix_alpha: float = 1.0,
@@ -298,7 +388,14 @@ def build_train_dataset(
     if total == 0:
         raise RuntimeError("Train set kosong.")
 
-    if transform is not None:
+    if framer is not None and geo_transform is not None \
+            and photo_transform is not None:
+        # Jalur baru: dua tahap + simulasi framing kamera.
+        map_fn = make_scene_augment_map_fn(
+            geo_transform, photo_transform, framer, img_size,
+            frame_prob=frame_prob,
+        )
+    elif transform is not None:
         map_fn = make_albumentations_map_fn(transform, img_size)
     else:
         map_fn = make_tf_native_augment_fn(img_size)
@@ -353,6 +450,8 @@ def build_eval_dataset(
     img_size: int,
     batch_size: int,
     transform=None,
+    framer: SceneFramer | None = None,
+    frame_scale: tuple[float, float] = (0.30, 0.45),
     one_hot: bool = True,
 ) -> tuple[tf.data.Dataset, int]:
     """
@@ -368,7 +467,10 @@ def build_eval_dataset(
 
     ds = tf.data.Dataset.from_tensor_slices((paths, labels))
 
-    if transform is not None:
+    if framer is not None:
+        ds = ds.map(make_scene_eval_map_fn(framer, img_size, frame_scale),
+                    num_parallel_calls=AUTOTUNE)
+    elif transform is not None:
         ds = ds.map(make_albumentations_map_fn(transform, img_size),
                     num_parallel_calls=AUTOTUNE)
     else:

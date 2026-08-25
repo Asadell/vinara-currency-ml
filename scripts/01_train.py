@@ -73,9 +73,13 @@ from src.data import (  # noqa: E402
     build_train_dataset,
 )
 
+from src.framing import SceneFramer  # noqa: E402
+
 try:
     from src.augment import (
+        build_geometric_transform,
         build_hard_eval_transform,
+        build_photometric_transform,
         build_train_transform,
     )
     HAS_ALBU = True
@@ -393,6 +397,23 @@ def main():
     ap.add_argument("--warmup-frac", type=float, default=0.08,
                     help="Porsi step awal untuk warmup linear")
 
+    # ── Simulasi framing kamera ──────────────────────────────────────────
+    ap.add_argument("--frame-prob", type=float, default=0.75,
+                    help="Peluang satu sampel training dikomposisi jadi ADEGAN "
+                         "PENUH (uang kecil di dalam frame kamera) bukan crop "
+                         "rapat. 0 = matikan simulasi framing, kembali ke "
+                         "pipeline satu tahap versi lama.")
+    ap.add_argument("--frame-scale-min", type=float, default=0.28,
+                    help="Fraksi minimum sisi terpanjang kanvas yang ditempati "
+                         "uang. 0.28 -> uang jadi ~63px di tensor 224x224.")
+    ap.add_argument("--frame-scale-max", type=float, default=1.0)
+    ap.add_argument("--bg-dir", default=None,
+                    help="Folder foto LATAR (tangan, meja, lantai, warung - "
+                         "tanpa uang). Sangat dianjurkan. Kalau kosong, "
+                         "dipakai latar prosedural yang jauh lebih lemah.")
+    ap.add_argument("--frame-eval-scale", type=float, default=0.38,
+                    help="Skala uang untuk FRAMING EVAL (regression test "
+                         "khusus kegagalan framing).")
     ap.add_argument("--aug-strength", choices=["light", "medium", "heavy"],
                     default="medium")
     ap.add_argument("--label-smoothing", type=float, default=0.05)
@@ -443,9 +464,37 @@ def main():
     print("\nMenyiapkan dataset...")
     train_transform = build_train_transform(args.aug_strength) if HAS_ALBU else None
 
+    # Simulasi framing kamera: dataset kita cuma berisi crop rapat bbox YOLO
+    # (uang >80% bidang), sedangkan yang masuk ke model di lapangan adalah
+    # frame kamera penuh dengan uang cuma sebagian kecil bidang. Tanpa ini
+    # model tidak pernah melihat skala yang sebenarnya dia hadapi.
+    framer = geo_transform = photo_transform = None
+    if HAS_ALBU and args.frame_prob > 0:
+        framer = SceneFramer(
+            bg_dir=args.bg_dir,
+            scale_range=(args.frame_scale_min, args.frame_scale_max),
+        )
+        geo_transform = build_geometric_transform(args.aug_strength)
+        photo_transform = build_photometric_transform(args.aug_strength)
+        src = f"{len(framer.pool)} foto dari {args.bg_dir}" if len(framer.pool) \
+            else "PROSEDURAL (tidak ada --bg-dir)"
+        print(f"  Simulasi framing: AKTIF | p={args.frame_prob} | "
+              f"skala={args.frame_scale_min}-{args.frame_scale_max} | "
+              f"latar={src}")
+        if not len(framer.pool):
+            print("  SARAN: isi --bg-dir dengan ~200-400 foto tangan/meja/"
+                  "lantai/warung tanpa uang. Latar asli jauh lebih efektif "
+                  "daripada latar sintetis.")
+    else:
+        print("  Simulasi framing: MATI (pipeline satu tahap versi lama)")
+
     train_ds, steps_per_epoch, class_counts = build_train_dataset(
         data_dir, args.img_size, args.batch_size,
         transform=train_transform,
+        geo_transform=geo_transform,
+        photo_transform=photo_transform,
+        framer=framer,
+        frame_prob=args.frame_prob,
         balanced=not args.no_balanced,
         mixup_alpha=args.mixup_alpha,
         cutmix_alpha=args.cutmix_alpha,
@@ -456,6 +505,19 @@ def main():
                                        args.batch_size)
     test_ds, n_test = build_eval_dataset(data_dir, "test", args.img_size,
                                          args.batch_size)
+
+    # FRAMING EVAL: test set yang sama, tapi tiap uang ditempel ke frame
+    # portrait pada skala kecil TANPA degradasi lain. Ini regression test
+    # terarah untuk kegagalan yang kita perbaiki. Kalau akurasinya jauh di
+    # bawah test biasa, model masih rapuh terhadap framing.
+    frame_eval_ds = None
+    if framer is not None:
+        frame_eval_ds, _ = build_eval_dataset(
+            data_dir, "test", args.img_size, args.batch_size,
+            framer=framer,
+            frame_scale=(args.frame_eval_scale * 0.8,
+                         args.frame_eval_scale * 1.2),
+        )
 
     print(f"  Train: {sum(class_counts)} gambar, "
           f"{steps_per_epoch} step/epoch (balanced="
@@ -614,6 +676,33 @@ def main():
             print("  Cukup baik, tapi masih ada ruang perbaikan.")
         else:
             print("  Bagus, model relatif stabil di kondisi buruk.")
+
+    # FRAMING EVAL: uang bersih di dalam frame kamera pada skala kecil.
+    # Ini metrik yang paling relevan dengan kegagalan lapangan - akurasi
+    # TEST biasa tidak akan pernah menangkapnya karena test set pun berisi
+    # crop rapat, sama seperti train set.
+    if frame_eval_ds is not None:
+        print("\n  Menyiapkan FRAMING TEST (uang kecil di dalam frame "
+              f"kamera, skala ~{args.frame_eval_scale})...")
+        fr_logits, fr_true = predict_logits(model, frame_eval_ds)
+        results["test_framing"] = print_eval(
+            "FRAMING TEST (uang kecil di frame kamera)", fr_logits, fr_true
+        )
+
+        fgap = results["test"]["accuracy"] - results["test_framing"]["accuracy"]
+        print(f"\n  Selisih akurasi crop rapat vs frame penuh: "
+              f"{fgap * 100:.2f} poin")
+        if fgap > 0.20:
+            print("  Model masih bias ke crop rapat. Naikkan --frame-prob, "
+                  "turunkan --frame-scale-min, dan isi --bg-dir dengan foto "
+                  "latar asli.")
+        elif fgap > 0.10:
+            print("  Membaik, tapi framing masih jadi titik lemah.")
+        else:
+            print("  Bagus, model tahan terhadap variasi framing & skala.")
+        print("  CATATAN: kalau selisih ini kecil TAPI aplikasi masih salah "
+              "di lapangan, masalahnya ada di ROI crop sisi aplikasi, bukan "
+              "di model.")
 
     # Reliability diagram
     plot_reliability(
