@@ -561,7 +561,7 @@ def main():
     output_dir = Path(args.output)
     if output_dir.exists():
         if args.clean:
-            shutil.rmtree(output_dir)
+            shutil.rmtree(output_dir, ignore_errors=True)
             print(f"Folder lama dihapus: {output_dir}")
         else:
             print(f"Peringatan: '{output_dir}' sudah ada. "
