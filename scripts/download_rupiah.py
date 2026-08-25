@@ -39,7 +39,7 @@ for workspace, project, version, fmt, folder_name in rupiah_datasets:
         proj = rf.workspace(workspace).project(project)
         ver = None
         # Try requested version first, then fallback to 1..10
-        for v in [version, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+        for v in [version, 2, 1, 3, 4, 5]:
             try:
                 ver = proj.version(v)
                 print(f"    (menggunakan versi v{v})")
@@ -47,8 +47,18 @@ for workspace, project, version, fmt, folder_name in rupiah_datasets:
             except Exception:
                 continue
         if ver:
-            ver.download(fmt, location=target)
-            print(f"✅ Selesai: {folder_name}")
+            import signal
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Download timed out on Roboflow server")
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(20) # 20 second max per dataset download
+            try:
+                ver.download(fmt, location=target)
+                signal.alarm(0)
+                print(f"✅ Selesai: {folder_name}")
+            except Exception as dl_err:
+                signal.alarm(0)
+                print(f"⚠️ Skip dataset {folder_name} (download error/timeout: {dl_err})")
         else:
             print(f"!!! FAILED: {workspace}/{project} - tidak ada versi valid yang ditemukan")
     except Exception as e:
