@@ -483,7 +483,7 @@ def main():
     args = ap.parse_args()
 
     if args.datasets is None or len(args.datasets) == 0:
-        import glob
+        import glob, os
         default_pattern = os.path.expanduser("~/datasets/rupiah-detection/rf-*")
         args.datasets = sorted(glob.glob(default_pattern))
         print(f"[INFO] Auto-discovered {len(args.datasets)} datasets in ~/datasets/rupiah-detection/rf-*")
